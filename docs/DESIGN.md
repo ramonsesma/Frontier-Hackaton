@@ -17,7 +17,7 @@ We built an HTTP service whose agent operates an unseen legacy system through sc
 1. The 5 systems are all reachable through the same kind of kiosk browser desktop.
 2. The evaluator sends one task at a time, so the service runs tasks sequentially.
 3. Nobody answers questions during a task, so there is no "ask for confirmation" outcome: every task ends as `terminada` or `fallida`.
-4. The model is reached with an Anthropic API key.
+4. The model is reached through OpenRouter (OpenAI-compatible API) with a vision and tool-calling model.
 5. A protocol client (our own RFB client) is allowed; the rule forbids tools that do the operating for us.
 
 ## 2. Architecture and decisions

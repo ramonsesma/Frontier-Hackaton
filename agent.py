@@ -1,15 +1,18 @@
 """Bucle del agente: captura -> modelo con vision -> acciones por RFB -> resumen."""
 import asyncio
 import base64
+import json
 import os
 import re
 import time
 
-import anthropic
+from openai import AsyncOpenAI
 
 from rfb import RFBClient
 
-MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")
+MODEL = os.environ.get("AGENT_MODEL", "anthropic/claude-sonnet-4.5")  # id de OpenRouter
+BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+MAX_STEPS = int(os.environ.get("MAX_STEPS", "80"))  # tope de llamadas al modelo por tarea
 HARD_LIMIT_S = float(os.environ.get("TASK_HARD_LIMIT_S", "270"))  # el evaluador corta a 300
 WARN_S = float(os.environ.get("TASK_WARN_S", "210"))
 KEEP_IMAGES = 4
@@ -112,6 +115,11 @@ TOOLS = [
 ]
 
 
+OAI_TOOLS = [{"type": "function", "function": {
+    "name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
+    for t in TOOLS]
+
+
 def scrub(text: str, secrets: list[str]) -> str:
     for s in secrets:
         if s and len(s) >= 3:
@@ -120,9 +128,8 @@ def scrub(text: str, secrets: list[str]) -> str:
 
 
 def _img_block(png: bytes) -> dict:
-    return {"type": "image", "source": {
-        "type": "base64", "media_type": "image/png",
-        "data": base64.b64encode(png).decode()}}
+    return {"type": "image_url", "image_url": {
+        "url": "data:image/png;base64," + base64.b64encode(png).decode()}}
 
 
 def _strip_old_images(messages: list):
@@ -131,16 +138,12 @@ def _strip_old_images(messages: list):
     for m in reversed(messages):
         if m["role"] != "user" or not isinstance(m["content"], list):
             continue
-        containers = [m["content"]]
-        for b in m["content"]:
-            if b.get("type") == "tool_result" and isinstance(b.get("content"), list):
-                containers.append(b["content"])
-        for blocks in reversed(containers):
-            for i in range(len(blocks) - 1, -1, -1):
-                if blocks[i].get("type") == "image":
-                    seen += 1
-                    if seen > KEEP_IMAGES:
-                        blocks[i] = {"type": "text", "text": "[captura anterior omitida]"}
+        blocks = m["content"]
+        for i in range(len(blocks) - 1, -1, -1):
+            if blocks[i].get("type") == "image_url":
+                seen += 1
+                if seen > KEEP_IMAGES:
+                    blocks[i] = {"type": "text", "text": "[captura anterior omitida]"}
 
 
 async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_done):
@@ -156,92 +159,102 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
     try:
         rfb = RFBClient(url, password)
         await asyncio.wait_for(rfb.connect(), timeout=30)
-        client = anthropic.AsyncAnthropic(max_retries=1, timeout=60)
+        client = AsyncOpenAI(base_url=BASE_URL, api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                             max_retries=1, timeout=60)
         system = SYSTEM.format(w=rfb.width, h=rfb.height)
 
         shot = await rfb.screenshot(settle=0.3)
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": f"Tarea: {tarea}\n\nEsta es la pantalla actual."},
-            _img_block(rfb.png(shot))]}]
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": f"Tarea: {tarea}\n\nEsta es la pantalla actual."},
+                        _img_block(rfb.png(shot))]}]
         warned = False
         finished = False
         nudges = 0
+        steps = 0
 
         while not finished:
-            if remaining() <= 8:
+            if remaining() <= 8 or steps >= MAX_STEPS:
                 estado = "fallida"
                 resumen = ("Se agoto el tiempo antes de poder confirmar que la tarea quedo completa. "
                            f"Tarea: {tarea}")
                 break
+            steps += 1
             _strip_old_images(messages)
             try:
                 resp = await asyncio.wait_for(
-                    client.messages.create(
-                        model=MODEL, max_tokens=MAX_TOKENS, system=system,
-                        tools=TOOLS, messages=messages),
+                    client.chat.completions.create(
+                        model=MODEL, max_tokens=MAX_TOKENS, tools=OAI_TOOLS,
+                        tool_choice="auto", messages=messages),
                     timeout=max(5, min(60, remaining() - 5)))
             except asyncio.TimeoutError:
                 continue
-            messages.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in resp.content]})
-            calls = [b for b in resp.content if b.type == "tool_use"]
+            msg = resp.choices[0].message
+            calls = msg.tool_calls or []
+            amsg = {"role": "assistant", "content": msg.content or ""}
+            if calls:
+                amsg["tool_calls"] = [{"id": c.id, "type": "function", "function": {
+                    "name": c.function.name, "arguments": c.function.arguments or "{}"}} for c in calls]
+            messages.append(amsg)
             if not calls:
                 nudges += 1
                 if nudges > 2:
                     estado, resumen = "fallida", "El agente no pudo decidir una accion. " + tarea
                     break
-                messages.append({"role": "user", "content": [
-                    {"type": "text", "text": "Continua con una herramienta, o llama a finish si ya terminaste."}]})
+                messages.append({"role": "user", "content": "Continua con una herramienta, o llama a finish si ya terminaste."})
                 continue
 
-            results = []
             for c in calls:
-                inp = c.input or {}
+                name = c.function.name
+                try:
+                    inp = json.loads(c.function.arguments or "{}")
+                    if not isinstance(inp, dict):
+                        inp = {}
+                except Exception:
+                    inp = {}
                 out = "ok"
                 try:
-                    if c.name == "finish":
+                    if name == "finish":
                         estado = inp.get("estado", "fallida")
                         if estado not in ("terminada", "fallida"):
                             estado = "fallida"
                         resumen = (inp.get("resumen") or "").strip()
-                        resp_val = (inp.get("respuesta") or "").strip().replace("\n", " ")
+                        resp_val = str(inp.get("respuesta") or "").strip().replace("\n", " ")
                         if resp_val and estado == "terminada":
                             resumen = f"{resumen}\nrespuesta: {resp_val}"
                         finished = True
                         out = "finalizado"
                     elif finished:
                         out = "ignorado: la tarea ya termino"
-                    elif c.name == "click":
+                    elif name == "click":
                         await rfb.click(inp["x"], inp["y"], inp.get("button", 1), inp.get("count", 1))
-                    elif c.name == "type":
+                    elif name == "type":
                         if inp.get("replace"):
                             await rfb.press("ctrl+a")
                             await asyncio.sleep(0.1)
                         await rfb.type_text(inp.get("text", ""))
-                    elif c.name == "key":
+                    elif name == "key":
                         await rfb.press(inp["combo"])
-                    elif c.name == "scroll":
+                    elif name == "scroll":
                         await rfb.scroll(inp["x"], inp["y"], inp["direction"], inp.get("amount", 3))
-                    elif c.name == "wait":
+                    elif name == "wait":
                         await asyncio.sleep(min(5.0, max(0.0, float(inp.get("seconds", 1)))))
                     else:
-                        out = f"herramienta desconocida: {c.name}"
+                        out = f"herramienta desconocida: {name}"
                 except Exception as e:  # accion fallida: el modelo lo ve y se adapta
                     out = f"error: {e}"
                     if isinstance(e, ConnectionError):
                         raise
-                results.append({"type": "tool_result", "tool_use_id": c.id,
-                                "content": [{"type": "text", "text": out}]})
+                messages.append({"role": "tool", "tool_call_id": c.id, "content": out})
             if finished:
                 break
 
             shot = await rfb.screenshot(settle=1.0)
-            note = f"[{int(time.monotonic() - t0)}s de {int(HARD_LIMIT_S)}s]"
+            note = f"[{int(time.monotonic() - t0)}s de {int(HARD_LIMIT_S)}s] Pantalla actual."
             if not warned and (time.monotonic() - t0) > WARN_S:
                 warned = True
                 note += " QUEDA POCO TIEMPO: termina ya con finish; si no pudiste confirmar el resultado, reportalo asi."
-            results[-1]["content"].append(_img_block(rfb.png(shot)))
-            results[-1]["content"].append({"type": "text", "text": note})
-            messages.append({"role": "user", "content": results})
+            messages.append({"role": "user", "content": [{"type": "text", "text": note}, _img_block(rfb.png(shot))]})
 
     except ConnectionError as e:
         estado, resumen = "fallida", f"Se perdio la conexion con el escritorio: {e}"

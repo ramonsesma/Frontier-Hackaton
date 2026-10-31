@@ -51,7 +51,7 @@ async def create_task(body: TaskIn, _=Depends(auth)):
     async def job():
         async with _lock:
             await run_task(body.tarea, body.escritorio.url, body.escritorio.password,
-                           [TEAM_TOKEN, os.environ.get("ANTHROPIC_API_KEY", "")], done)
+                           [TEAM_TOKEN, os.environ.get("OPENROUTER_API_KEY", "")], done)
 
     t = asyncio.create_task(job())
     _bg.add(t)

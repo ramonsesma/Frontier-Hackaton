@@ -31,7 +31,7 @@ Docker:
 docker build -t desktop-agent .
 docker run -p 8080:8080 \
   -e TEAM_TOKEN=<team token> \
-  -e ANTHROPIC_API_KEY=<model key> \
+  -e OPENROUTER_API_KEY=<model key> \
   desktop-agent
 ```
 
@@ -39,7 +39,7 @@ Without Docker (Python 3.12):
 
 ```bash
 pip install -r requirements.txt
-TEAM_TOKEN=<team token> ANTHROPIC_API_KEY=<model key> uvicorn server:app --host 0.0.0.0 --port 8080
+TEAM_TOKEN=<team token> OPENROUTER_API_KEY=<model key> uvicorn server:app --host 0.0.0.0 --port 8080
 ```
 
 Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
@@ -55,8 +55,10 @@ Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `TEAM_TOKEN` | Bearer token; without it every call returns 401 | required |
-| `ANTHROPIC_API_KEY` | Model access | required |
-| `AGENT_MODEL` | Model that chooses the actions | `claude-sonnet-5-5` |
+| `OPENROUTER_API_KEY` | Model access through OpenRouter | required |
+| `AGENT_MODEL` | OpenRouter model id that chooses the actions (must accept images and tools) | `anthropic/claude-sonnet-4.5` |
+| `LLM_BASE_URL` | OpenAI-compatible endpoint | `https://openrouter.ai/api/v1` |
+| `MAX_STEPS` | Cap of model calls per task | `80` |
 | `TASK_HARD_LIMIT_S` | Hard limit per task, in seconds | `270` |
 | `TASK_WARN_S` | When the model is told to wrap up | `210` |
 | `PORT` | Port inside the container | `8080` |
