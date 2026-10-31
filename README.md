@@ -20,8 +20,10 @@ language, works on it in the background and reports a final status and a summary
 4. The desktop password and the service secrets are replaced in the summary before it is published.
 5. `GET /tasks/{task_id}` returns `{"estado": "en_curso" | "terminada" | "fallida", "resumen": "..."}`.
 
-A task is stopped at 270 s (the evaluator cuts at 300 s), and the VNC connection is closed as soon
-as the final status is reported.
+A task is stopped at 270 s counted from the moment the request arrives (the evaluator cuts at 300 s),
+and the VNC connection is closed as soon as the final status is reported. Only one agent runs per
+desktop: a new task for the same desktop cancels the previous one, and an identical task that is
+still running is not started twice.
 
 ## Entrypoint
 
@@ -66,7 +68,8 @@ Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
 ## Tests
 
 ```bash
-python test_rfb.py
+python test_rfb.py     # VNC client against a simulated server
+python test_server.py  # per-desktop locking, cancellation, duplicates, late start (needs httpx)
 ```
 
 It checks the RFB client (handshake, VNC authentication, framebuffer, mouse and keyboard) against a

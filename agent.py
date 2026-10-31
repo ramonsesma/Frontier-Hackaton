@@ -16,6 +16,7 @@ MAX_STEPS = int(os.environ.get("MAX_STEPS", "80"))  # tope de llamadas al modelo
 HARD_LIMIT_S = float(os.environ.get("TASK_HARD_LIMIT_S", "270"))  # el evaluador corta a 300
 WARN_S = float(os.environ.get("TASK_WARN_S", "210"))
 KEEP_IMAGES = 4
+MIN_START_S = 20  # si al llegar su turno quedan menos segundos, no se toca el escritorio
 MAX_TOKENS = 1500
 
 SYSTEM = """Eres un empleado nuevo que opera un sistema de gestion antiguo (sin API ni documentacion) \
@@ -146,9 +147,10 @@ def _strip_old_images(messages: list):
                     blocks[i] = {"type": "text", "text": "[captura anterior omitida]"}
 
 
-async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_done):
-    """Ejecuta la tarea y llama on_done(estado, resumen). Nunca lanza."""
-    t0 = time.monotonic()
+async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_done, t_start: float | None = None):
+    """Ejecuta la tarea y llama on_done(estado, resumen). El reloj cuenta desde t_start (recepcion
+    de la peticion); si es None, desde ahora. Solo propaga la cancelacion."""
+    t0 = t_start if t_start is not None else time.monotonic()
     all_secrets = [password] + list(secrets)
     rfb = None
     estado, resumen = "fallida", "No se pudo completar la tarea."
@@ -157,6 +159,10 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
         return HARD_LIMIT_S - (time.monotonic() - t0)
 
     try:
+        if remaining() <= MIN_START_S:
+            resumen = ("No hubo tiempo para empezar la tarea: espero turno y se agoto el limite. "
+                       f"No se hizo ningun cambio en el escritorio. Tarea: {tarea}")
+            return
         rfb = RFBClient(url, password)
         await asyncio.wait_for(rfb.connect(), timeout=30)
         client = AsyncOpenAI(base_url=BASE_URL, api_key=os.environ.get("OPENROUTER_API_KEY", ""),

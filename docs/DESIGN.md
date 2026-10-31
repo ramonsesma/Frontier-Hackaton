@@ -35,7 +35,7 @@ The service has three modules. `server.py` validates the token and starts the ta
 | Failure semantics | `fallida` with ids, states and limits from the screen | Retrying or forcing the action | A forced action is an extra change and counts as destructive |
 | Time control | Hard limit 270 s, warning at 210 s, then stop and close VNC | Letting the model decide when to stop | Work after 5 minutes falls on the next task |
 | Secrets | Replace the password and tokens in the summary in code | Asking the model not to repeat them | A leak makes the task incorrect |
-| Concurrency | One task at a time | Parallel tasks | Two tasks on the same desktop would corrupt each other |
+| Concurrency | One agent per desktop (lock keyed by the VNC URL); a new task on the same desktop cancels the previous one; an identical task still running returns the same `task_id`; the 5-minute clock starts when the request arrives | One global lock; parallel agents on one desktop | Two agents on the same desktop would corrupt each other, a queued task must not run after the evaluator reset the desktop, and desktops of different tasks do not interfere |
 | Context | Keep the last 4 screenshots | Keep all | Latency and cost grow with every image |
 
 ## 3. Plan to measure
@@ -69,7 +69,7 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 ## 4. Out of scope
 
 - Memory across tasks and persistence of task state after a restart.
-- Parallel tasks and any human confirmation step.
+- Any human confirmation step.
 - CAPTCHAs and apps that are not shown in the kiosk browser.
 - A spend cap per task (open, see risks).
 

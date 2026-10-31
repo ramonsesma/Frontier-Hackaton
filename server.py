@@ -2,6 +2,7 @@
 import asyncio
 import hmac
 import os
+import time
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -14,7 +15,12 @@ TEAM_TOKEN = os.environ.get("TEAM_TOKEN", "")
 app = FastAPI()
 TASKS: dict[str, dict] = {}
 _bg: set = set()
-_lock = asyncio.Lock()  # un escritorio a la vez: evita acciones cruzadas entre tareas
+_locks: dict[str, asyncio.Lock] = {}   # un bloqueo por escritorio (URL de VNC)
+_live: dict[str, list[dict]] = {}      # tareas vivas (en curso o en cola) por escritorio
+
+
+def _lock_for(key: str) -> asyncio.Lock:
+    return _locks.setdefault(key, asyncio.Lock())
 
 
 def auth(request: Request):
@@ -42,20 +48,50 @@ async def health(_=Depends(auth)):
 
 @app.post("/tasks")
 async def create_task(body: TaskIn, _=Depends(auth)):
+    received = time.monotonic()  # el reloj de 5 min del evaluador corre desde aqui
+    key = body.escritorio.url
+    live = _live.setdefault(key, [])
+
+    # Misma tarea sobre el mismo escritorio mientras sigue activa: es un reintento, no se repite.
+    for t in live:
+        if t["tarea"] == body.tarea and TASKS[t["id"]]["estado"] == "en_curso":
+            return {"task_id": t["id"]}
+
+    # Otra tarea sobre el mismo escritorio: el evaluador ya dejo de mirar la anterior,
+    # asi que se cancela (cierra su VNC) para que no siga operando sobre la nueva.
+    for t in list(live):
+        t["atask"].cancel()
+
     task_id = uuid.uuid4().hex
     TASKS[task_id] = {"estado": "en_curso", "resumen": ""}
+    entry = {"id": task_id, "tarea": body.tarea, "atask": None}
 
     def done(estado: str, resumen: str):
         TASKS[task_id] = {"estado": estado, "resumen": resumen}
 
     async def job():
-        async with _lock:
-            await run_task(body.tarea, body.escritorio.url, body.escritorio.password,
-                           [TEAM_TOKEN, os.environ.get("OPENROUTER_API_KEY", "")], done)
+        try:
+            async with _lock_for(key):  # un solo agente a la vez por escritorio
+                await run_task(body.tarea, body.escritorio.url, body.escritorio.password,
+                               [TEAM_TOKEN, os.environ.get("OPENROUTER_API_KEY", "")], done,
+                               t_start=received)
+        except asyncio.CancelledError:
+            TASKS[task_id] = {"estado": "fallida",
+                              "resumen": "Tarea cancelada: llego otra tarea para el mismo escritorio."}
+            raise
 
-    t = asyncio.create_task(job())
-    _bg.add(t)
-    t.add_done_callback(_bg.discard)
+    def cleanup(_t):  # tambien cubre una tarea cancelada antes de llegar a ejecutarse
+        _bg.discard(_t)
+        if entry in live:
+            live.remove(entry)
+        if TASKS[task_id]["estado"] == "en_curso":
+            TASKS[task_id] = {"estado": "fallida",
+                              "resumen": "Tarea cancelada: llego otra tarea para el mismo escritorio."}
+
+    entry["atask"] = asyncio.create_task(job())
+    live.append(entry)
+    _bg.add(entry["atask"])
+    entry["atask"].add_done_callback(cleanup)
     return {"task_id": task_id}
 
 
