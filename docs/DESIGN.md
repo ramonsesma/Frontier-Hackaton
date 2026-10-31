@@ -85,8 +85,31 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 | E4 export a filtered report | 2 | 2 of 2 |
 | E5 homonyms (must fail, naming both documents) | 2 | 2 of 2 |
 
-- Total: 13 runs, 12 pass. The one failure was an E1 run on an earlier build that failed the check "no actions outside the task". Its cause is **not known**: that build did not log the agent's steps. On the deployed build (with step logging) all 8 runs pass (E1 three times, the other four tasks once each).
-- Time per task: 47 s to 200 s, against 300 s allowed. The runs on the deployed build took 47 s to 142 s.
+- Original theme: 13 runs, 12 pass. The one failure was an E1 run on an earlier build that failed the check "no actions outside the task". Its cause is **not known**: that build did not log the agent's steps. On the deployed build (with step logging) all 8 runs pass (E1 three times, the other four tasks once each).
+- Time per task: 47 s to 200 s, against 300 s allowed.
+
+**New theme (app version 4.2), two rounds of the 5 tasks on the deployed service, 10 of 10 pass:**
+
+| Task | Round 1 (prompt for the new theme) | Round 2 (shorter checks, retries) |
+| --- | --- | --- |
+| E1 create a client | 185 s | 121 s |
+| E2 correct an address | 117 s | 84 s |
+| E3 count overdue invoices | 205 s, answer 45 | 110 s, answer 45 |
+| E4 export a report | 90 s | 104 s |
+| E5 homonyms (`fallida`, both ids named) | 58 s | 58 s |
+
+- E3 gives 45 on both themes and in both rounds; the agent excluded the similarly named client "Ferretería Ruiz e Hijos" from the count. The app check does not validate answers, so 45 is checked only against the earlier runs, not against an official value.
+- The speed-up between rounds came from two prompt rules (stop once the app confirms a save; count rows once per page). In the E1 run read in detail the model still sent one action per step, so the instruction to chain actions had no visible effect.
+- The pop-up of version 4.2 was closed in step 1 and the create form was applied once in the runs whose step logs we read (E1 and E3 in round 1, E1 in round 2). We did not read the step logs of E2, E4 and E5. The app checks report no duplicates and no actions outside the task in all 10 runs.
+
+**Changes made after the first measurements, and what they cost:**
+
+| Change | Why | Cost or open point |
+| --- | --- | --- |
+| Close pop-ups; find controls by function; press apply once | The client's version 4.2 | Prompt only; checked on the practice app, not on an unseen one |
+| Stop after the app confirms a save; one count per page | Runs were close to the limit | In the E1 run read, the duplicate check used the tax id only, not also the name |
+| Retry transient model errors (up to 3 in a row) | A model API error ended the task as `fallida` | Tested with a fake model only; never triggered in the real runs |
+| Compare the bearer token as bytes | A header with a non-ASCII character returned 500 instead of 401 | Found when a placeholder with "…" was pasted into a request; fixed |
 - `terminada` / `fallida` and the `respuesta:` line were checked by reading the task output and the service logs, because the app check only looks at the state of the app. The summaries did not contain the desktop password.
 - The RFB client works with Raw encoding against the real desktop, and the model chosen is reachable with the event key.
 
@@ -97,7 +120,8 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 | Intermittent extra action (seen once on E1) | Task counts as destructive | Step logs now show every action; investigate the next occurrence |
 | Free hosting sleeps after about 15 minutes without traffic | First call after a pause takes about a minute and can miss the 2 s limit | Call `/health` before each run |
 | Time runs out on a long task | Reported `fallida`, counted as a failure | Slowest practice run was 200 s; the loop stops at 270 s |
-| A transient model API error | The task ends as `fallida` | No retry policy yet |
+| A transient model API error | Up to 3 retries, then `fallida` saying the task may be half done | Retries only tested with a fake model |
+| The client changes the app again without notice | The agent has no hard-coded labels or positions, but prompt rules were tuned on the practice app | Step logs show where it gets lost; a different layout is unmeasured |
 | Service restarts mid-task | State in memory is lost | Keep one instance; do not deploy during evaluation |
 
 Open questions: whether the other 4 systems also use the kiosk browser, and what the evaluator sends when two tasks arrive close together.

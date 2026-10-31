@@ -68,22 +68,62 @@ Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
 ## Tests
 
 ```bash
+pip install -r requirements.txt   # httpx, needed by the service tests, comes with `openai`
 python test_rfb.py     # VNC client against a simulated server
-python test_server.py  # per-desktop locking, cancellation, duplicates, late start (needs httpx)
+python test_server.py  # per-desktop locking, cancellation, duplicates, late start, 401 on bad tokens
+python test_agent.py   # agent loop with a fake model and desktop: actions, secret scrubbing,
+                       # model-error retries, chained actions
 ```
 
-It checks the RFB client (handshake, VNC authentication, framebuffer, mouse and keyboard) against a
-simulated VNC server. It does not exercise the model or a real desktop.
+None of them needs network, an API key or a real desktop. They do **not** exercise the real model or
+the real app: that was measured separately (see Status).
+
+## Try it without a desktop
+
+```bash
+TEAM_TOKEN=test uvicorn server:app --port 8080 &
+curl -H "Authorization: Bearer test" http://localhost:8080/health   # {"ok":true}
+curl http://localhost:8080/health                                    # 401
+```
+
+Running the full agent needs an OpenRouter key and a VNC desktop (`wss://.../websockify` plus its
+password); neither is in this repository.
 
 ## Status
 
 - Unit tests (no network): the RFB client against a simulated server, the agent loop with a fake model
   and desktop, and the service's per-desktop locking.
-- Run against a real desktop with the real model on the 5 practice tasks: 13 runs, 12 pass. All 8 runs on
-  the current build pass. The one failure was on an earlier build, with an unknown cause (no step logs
-  then). Times: 47 s to 200 s per task.
-- Not verified: any app other than the practice app, cost per task, and the event's validation runs.
-  Details and risks are in the design document.
+- Run against a real desktop with the real model on the 5 practice tasks:
+  - Original theme: 13 runs, 12 pass. The one failure was on an earlier build, with an unknown cause
+    (no step logs then).
+  - New theme (version 4.2, see below): two rounds of the 5 tasks, 10 of 10 pass. Slowest run 205 s in
+    the first round and 121 s in the second (limit 270 s).
+- Not verified: any app other than the practice app, cost per task, the model-error retries against the
+  real API (only tested with a fake model), and the event's validation runs. Details and risks are in
+  the design document.
+
+### Incident: the client changed the app's theme
+
+The client updated the app to version 4.2 without notice. A pop-up "Novedades de la versión 4.2" opens
+with the app, the action bar moved to the right, buttons have new names, and forms are now applied
+without closing.
+
+- What we found: the agent chooses each click from the screenshot and has no hard-coded labels or
+  positions, so moved buttons and renamed labels did not need code. Two assumptions did break down:
+  nothing told it what to do with a pop-up on opening, and a form that stays open after "Aplicar" can look
+  like a failed save and be saved twice, which would duplicate or change more than asked.
+- What we changed (prompt only): close informational pop-ups first; identify controls by function and
+  on-screen text, not by position; press apply once per set of changes and read the success message.
+- Evidence (step logs on the deployed service): in the runs read in detail, the pop-up is closed in
+  step 1 (E1 and E3 in the first round, E1 in the second), and the create-client form was applied once.
+  The app's own checks report no duplicates and no actions outside the task in all 10 runs. We did not
+  read the step logs of E2, E4 and E5.
+- Later changes for speed, validated on the same 5 tasks: finish as soon as the app confirms a save
+  instead of searching the record again, count rows once per page, and retry transient model errors.
+  The speed-up came from the shorter verification and the single count; in the run read in detail
+  the model still issued one action per step, so chaining actions had no visible effect.
+- Trade-off: with the shorter checks the agent, in the one run we read, searched for an existing client by
+  tax id only and not also by name, so a same-name record with another id would be less likely to be seen.
 
 ## Use of AI
 

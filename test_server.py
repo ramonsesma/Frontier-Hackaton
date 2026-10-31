@@ -73,6 +73,9 @@ async def main():
         # 5. sin token
         r = await c.post("/tasks", json=body("Q", "wss://d9"))
         assert r.status_code == 401
+        # 5b. token con caracteres no ASCII (p. ej. "…"): 401, nunca 500
+        r = await c.get("/health", headers={"Authorization": "Bearer ftr_…".encode("utf-8")})
+        assert r.status_code == 401, r.status_code
         await asyncio.sleep(0.8)
 
     # 6. agente real: si al llegar su turno ya no queda tiempo, no toca el escritorio
