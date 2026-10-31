@@ -77,9 +77,13 @@ simulated VNC server. It does not exercise the model or a real desktop.
 
 ## Status
 
-- Tested: the RFB client against the simulated server; the service imports.
-- Not yet tested: a run against a real desktop, against the model API, or on the practice tasks.
-  See the measurement plan in the design document.
+- Unit tests (no network): the RFB client against a simulated server, the agent loop with a fake model
+  and desktop, and the service's per-desktop locking.
+- Run against a real desktop with the real model on the 5 practice tasks: 13 runs, 12 pass. All 8 runs on
+  the current build pass. The one failure was on an earlier build, with an unknown cause (no step logs
+  then). Times: 47 s to 200 s per task.
+- Not verified: any app other than the practice app, cost per task, and the event's validation runs.
+  Details and risks are in the design document.
 
 ## Use of AI
 

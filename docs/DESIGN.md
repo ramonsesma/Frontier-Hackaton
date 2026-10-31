@@ -40,7 +40,7 @@ The service has three modules. `server.py` validates the token and starts the ta
 
 ## 3. Plan to measure
 
-The measurements below are defined before more building. The numbers are targets, not results: nothing has run against a real desktop yet.
+The measurements below were defined before building. The Target column holds the goals; section 5 reports what has been measured so far.
 
 | Metric | How it is measured | Target |
 | --- | --- | --- |
@@ -71,18 +71,33 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 - Memory across tasks and persistence of task state after a restart.
 - Any human confirmation step.
 - CAPTCHAs and apps that are not shown in the kiosk browser.
-- A spend cap per task (open, see risks).
+- A spend cap in money per task: only a cap on model calls (`MAX_STEPS`) exists; cost per task has not been measured.
 
 ## 5. Status and risks
 
-**Verified:** the RFB client passes a test against a simulated VNC server (handshake, authentication, framebuffer, input), and the service imports. **Not verified:** any run against a real desktop, against the model API, or on the practice tasks.
+**Measured on the 5 practice tasks (real desktop, real model):**
+
+| Task | Runs | Final state correct and app check passes |
+| --- | --- | --- |
+| E1 create a client | 5 | 4 of 5 |
+| E2 correct an address that carries a note | 2 | 2 of 2 |
+| E3 count overdue invoices (question) | 2 | 2 of 2 |
+| E4 export a filtered report | 2 | 2 of 2 |
+| E5 homonyms (must fail, naming both documents) | 2 | 2 of 2 |
+
+- Total: 13 runs, 12 pass. The one failure was an E1 run on an earlier build that failed the check "no actions outside the task". Its cause is **not known**: that build did not log the agent's steps. On the deployed build (with step logging) all 8 runs pass (E1 three times, the other four tasks once each).
+- Time per task: 47 s to 200 s, against 300 s allowed. The runs on the deployed build took 47 s to 142 s.
+- `terminada` / `fallida` and the `respuesta:` line were checked by reading the task output and the service logs, because the app check only looks at the state of the app. The summaries did not contain the desktop password.
+- The RFB client works with Raw encoding against the real desktop, and the model chosen is reachable with the event key.
+
+**Not verified:** any app other than the practice app (the grader uses one the agent has not seen), cost per task, behaviour on the 4 other systems, and the three validation runs of the event. Passing the practice tasks does not predict the held-out score; the prompt rules were written with these five tasks in view.
 
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
-| Real server uses a different encoding than Raw | Client fails with a clear error | Add the encoding found |
-| Screen repaints slower than 1 s | The model acts on a stale capture | Increase the wait after each action |
-| Time runs out on a finished task | Reported `fallida`, counted as a failure | Tune the loop with the practice tasks |
-| No spend cap per task | A loop could spend more than planned | Add a cost or step cap before deploying |
-| Service restarts mid-task | State in memory is lost | Keep one instance during evaluation |
+| Intermittent extra action (seen once on E1) | Task counts as destructive | Step logs now show every action; investigate the next occurrence |
+| Free hosting sleeps after about 15 minutes without traffic | First call after a pause takes about a minute and can miss the 2 s limit | Call `/health` before each run |
+| Time runs out on a long task | Reported `fallida`, counted as a failure | Slowest practice run was 200 s; the loop stops at 270 s |
+| A transient model API error | The task ends as `fallida` | No retry policy yet |
+| Service restarts mid-task | State in memory is lost | Keep one instance; do not deploy during evaluation |
 
-Open questions: whether the other 4 systems also use the kiosk browser, and how the evaluator handles two tasks sent at once.
+Open questions: whether the other 4 systems also use the kiosk browser, and what the evaluator sends when two tasks arrive close together.
