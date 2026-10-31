@@ -25,8 +25,9 @@ def _lock_for(key: str) -> asyncio.Lock:
 
 def auth(request: Request):
     header = request.headers.get("authorization", "")
+    # Se compara en bytes: compare_digest lanza TypeError con str no ASCII (daba 500 en vez de 401).
     ok = header.startswith("Bearer ") and TEAM_TOKEN and hmac.compare_digest(
-        header[7:].strip(), TEAM_TOKEN)
+        header[7:].strip().encode("utf-8"), TEAM_TOKEN.encode("utf-8"))
     if not ok:
         raise HTTPException(status_code=401, detail="no autorizado")
 
