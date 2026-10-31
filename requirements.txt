@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12
+pillow>=10
+pycryptodome>=3.20
+anthropic>=0.40
+pydantic>=2
