@@ -84,4 +84,70 @@ async def main():
     print("AGENT OK")
 
 
+def _make_client(script):
+    """Cliente falso: cada elemento de script es una respuesta (content, calls) o una excepcion."""
+    class C:
+        def __init__(self, *a, **k):
+            self.chat = NS(completions=NS(create=self.create))
+            self.n = 0
+
+        async def create(self, **kw):
+            item = script[self.n]
+            self.n += 1
+            if isinstance(item, Exception):
+                raise item
+            if item == "EMPTY":
+                return NS(choices=[], usage=None)
+            content, calls = item
+            return NS(choices=[NS(message=NS(content=content, tool_calls=calls))],
+                      usage=NS(prompt_tokens=1, completion_tokens=1))
+    return C
+
+
+async def _run(script):
+    ACTS.clear()
+    agent.RFBClient = FakeRFB
+    agent.AsyncOpenAI = _make_client(script)
+    out, buf = {}, io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        await agent.run_task("Tarea X", "wss://d/websockify", PASS, [], lambda e, r: out.update(e=e, r=r),
+                             t_start=time.monotonic(), tag="t")
+    return out, buf.getvalue()
+
+
+async def main_extra():
+    import httpx
+    agent.CHAIN_PAUSE_S = 0.01
+    req = httpx.Request("POST", "https://x/y")
+    fin = lambda: ("ok", [tc(9, "finish", estado="terminada", resumen="listo")])
+
+    # 1) un fallo transitorio (5xx) y luego responde: se recupera sin gastar un paso
+    err5xx = agent.openai.InternalServerError("boom", response=httpx.Response(502, request=req), body=None)
+    out, logs = await _run([err5xx, fin()])
+    assert out["e"] == "terminada" and "fallo transitorio del modelo (1/3)" in logs, (out, logs)
+
+    # 2) respuesta vacia (choices=[]) tambien se trata como transitoria
+    out, logs = await _run(["EMPTY", fin()])
+    assert out["e"] == "terminada" and "respuesta vacia del modelo" in logs, (out, logs)
+
+    # 3) tres fallos seguidos: fallida, honesta, sin tocar mas el escritorio
+    errc = agent.openai.APIConnectionError(request=req)
+    out, logs = await _run([errc, errc, errc, fin()])
+    assert out["e"] == "fallida" and "a medias" in out["r"] and ACTS == [], (out, logs)
+
+    # 4) error permanente (401): no se reintenta
+    err401 = agent.openai.AuthenticationError("no", response=httpx.Response(401, request=req), body=None)
+    out, logs = await _run([err401, fin()])
+    assert out["e"] == "fallida" and "fallo transitorio" not in logs, (out, logs)
+
+    # 5) acciones encadenadas en una respuesta: se ejecutan en orden, y cada tool_call se responde
+    chain = [tc(1, "click", x=10, y=20), tc(2, "type", text="abc"), tc(3, "click", x=30, y=40),
+             tc(4, "type", text="def")]
+    out, logs = await _run([("relleno", chain), fin()])
+    assert out["e"] == "terminada", (out, logs)
+    assert ACTS == [("click", 10, 20), ("type", "abc"), ("click", 30, 40), ("type", "def")], ACTS
+    print("EXTRA OK")
+
+
 asyncio.run(main())
+asyncio.run(main_extra())
