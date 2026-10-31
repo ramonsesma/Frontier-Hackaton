@@ -14,7 +14,7 @@ H = {"Authorization": "Bearer tok-prueba"}
 LOG = []
 
 
-async def fake_run_task(tarea, url, password, secrets, on_done, t_start=None):
+async def fake_run_task(tarea, url, password, secrets, on_done, t_start=None, tag=""):
     LOG.append(("inicio", tarea, url))
     try:
         await asyncio.sleep(0.6)

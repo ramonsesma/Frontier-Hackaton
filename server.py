@@ -55,6 +55,7 @@ async def create_task(body: TaskIn, _=Depends(auth)):
     # Misma tarea sobre el mismo escritorio mientras sigue activa: es un reintento, no se repite.
     for t in live:
         if t["tarea"] == body.tarea and TASKS[t["id"]]["estado"] == "en_curso":
+            print(f"[server] duplicado de {t['id'][:8]}: se devuelve el mismo task_id", flush=True)
             return {"task_id": t["id"]}
 
     # Otra tarea sobre el mismo escritorio: el evaluador ya dejo de mirar la anterior,
@@ -64,6 +65,7 @@ async def create_task(body: TaskIn, _=Depends(auth)):
 
     task_id = uuid.uuid4().hex
     TASKS[task_id] = {"estado": "en_curso", "resumen": ""}
+    print(f"[server] tarea {task_id[:8]} recibida; vivas en ese escritorio antes: {len(live)}", flush=True)
     entry = {"id": task_id, "tarea": body.tarea, "atask": None}
 
     def done(estado: str, resumen: str):
@@ -74,7 +76,7 @@ async def create_task(body: TaskIn, _=Depends(auth)):
             async with _lock_for(key):  # un solo agente a la vez por escritorio
                 await run_task(body.tarea, body.escritorio.url, body.escritorio.password,
                                [TEAM_TOKEN, os.environ.get("OPENROUTER_API_KEY", "")], done,
-                               t_start=received)
+                               t_start=received, tag=task_id[:8])
         except asyncio.CancelledError:
             TASKS[task_id] = {"estado": "fallida",
                               "resumen": "Tarea cancelada: llego otra tarea para el mismo escritorio."}

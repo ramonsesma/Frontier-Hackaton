@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import traceback
 
 from openai import AsyncOpenAI
 
@@ -147,7 +148,7 @@ def _strip_old_images(messages: list):
                     blocks[i] = {"type": "text", "text": "[captura anterior omitida]"}
 
 
-async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_done, t_start: float | None = None):
+async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_done, t_start: float | None = None, tag: str = ""):
     """Ejecuta la tarea y llama on_done(estado, resumen). El reloj cuenta desde t_start (recepcion
     de la peticion); si es None, desde ahora. Solo propaga la cancelacion."""
     t0 = t_start if t_start is not None else time.monotonic()
@@ -158,13 +159,21 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
     def remaining():
         return HARD_LIMIT_S - (time.monotonic() - t0)
 
+    def log(msg, limit: int = 400):
+        """Una linea por paso, con los secretos tapados. Nunca se registran capturas."""
+        line = scrub(" ".join(str(msg).split()), all_secrets)
+        print(f"[agent {tag or '-'} +{time.monotonic() - t0:.0f}s] {line[:limit]}", flush=True)
+
     try:
         if remaining() <= MIN_START_S:
+            log("sin tiempo para empezar: no se toca el escritorio")
             resumen = ("No hubo tiempo para empezar la tarea: espero turno y se agoto el limite. "
                        f"No se hizo ningun cambio en el escritorio. Tarea: {tarea}")
             return
+        log(f"inicio tarea={tarea!r} escritorio={url}")
         rfb = RFBClient(url, password)
         await asyncio.wait_for(rfb.connect(), timeout=30)
+        log(f"conectado {rfb.width}x{rfb.height} modelo={MODEL}")
         client = AsyncOpenAI(base_url=BASE_URL, api_key=os.environ.get("OPENROUTER_API_KEY", ""),
                              max_retries=1, timeout=60)
         system = SYSTEM.format(w=rfb.width, h=rfb.height)
@@ -181,12 +190,14 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
 
         while not finished:
             if remaining() <= 8 or steps >= MAX_STEPS:
+                log(f"corte: quedan {remaining():.0f}s, pasos={steps}")
                 estado = "fallida"
                 resumen = ("Se agoto el tiempo antes de poder confirmar que la tarea quedo completa. "
                            f"Tarea: {tarea}")
                 break
             steps += 1
             _strip_old_images(messages)
+            tm = time.monotonic()
             try:
                 resp = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -194,9 +205,14 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                         tool_choice="auto", messages=messages),
                     timeout=max(5, min(60, remaining() - 5)))
             except asyncio.TimeoutError:
+                log(f"paso {steps}: el modelo no respondio a tiempo, reintento")
                 continue
             msg = resp.choices[0].message
             calls = msg.tool_calls or []
+            usage = getattr(resp, "usage", None)
+            log(f"paso {steps}: modelo {time.monotonic() - tm:.1f}s "
+                f"tokens={getattr(usage, 'prompt_tokens', '?')}/{getattr(usage, 'completion_tokens', '?')} "
+                f"acciones={[c.function.name for c in calls]} texto={(msg.content or '')[:160]!r}")
             amsg = {"role": "assistant", "content": msg.content or ""}
             if calls:
                 amsg["tool_calls"] = [{"id": c.id, "type": "function", "function": {
@@ -205,6 +221,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
             if not calls:
                 nudges += 1
                 if nudges > 2:
+                    log("el modelo no uso ninguna herramienta 3 veces: se corta")
                     estado, resumen = "fallida", "El agente no pudo decidir una accion. " + tarea
                     break
                 messages.append({"role": "user", "content": "Continua con una herramienta, o llama a finish si ya terminaste."})
@@ -219,6 +236,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                 except Exception:
                     inp = {}
                 out = "ok"
+                log(f"accion {name} {json.dumps(inp, ensure_ascii=False)}")
                 try:
                     if name == "finish":
                         estado = inp.get("estado", "fallida")
@@ -249,6 +267,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                         out = f"herramienta desconocida: {name}"
                 except Exception as e:  # accion fallida: el modelo lo ve y se adapta
                     out = f"error: {e}"
+                    log(f"la accion {name} fallo: {type(e).__name__}: {e}")
                     if isinstance(e, ConnectionError):
                         raise
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": out})
@@ -262,11 +281,18 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                 note += " QUEDA POCO TIEMPO: termina ya con finish; si no pudiste confirmar el resultado, reportalo asi."
             messages.append({"role": "user", "content": [{"type": "text", "text": note}, _img_block(rfb.png(shot))]})
 
+    except asyncio.CancelledError:
+        log("cancelada: llego otra tarea para el mismo escritorio")
+        estado, resumen = "fallida", "Tarea cancelada: llego otra tarea para el mismo escritorio."
+        raise
     except ConnectionError as e:
+        log(f"conexion perdida: {e}")
         estado, resumen = "fallida", f"Se perdio la conexion con el escritorio: {e}"
     except Exception as e:
+        log(f"error interno: {type(e).__name__}: {e} | {traceback.format_exc()[-1200:]}", limit=1600)
         estado, resumen = "fallida", f"Error interno del agente: {type(e).__name__}"
     finally:
         if rfb:
             await rfb.close()  # dejar de operar de inmediato
+        log(f"fin estado={estado} resumen={resumen}")
         on_done(estado, scrub(resumen, all_secrets))
