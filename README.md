@@ -1,4 +1,4 @@
-# Agent for a legacy system with no API (Frontier Challenge 1)
+# Agent for a legacy system with no API
 
 An HTTP service whose agent operates an unseen management system the way a new employee would:
 it looks at the screen and uses mouse and keyboard over VNC. It receives a task in natural
@@ -143,10 +143,5 @@ desktop or the real model, and the deployed service was not updated (it still ru
 Not changed: the time-outs (model latency, about 6 s per step) and a case where the agent cancelled a
 pending appointment because the app asked for it, which may count as an extra change.
 
-## Use of AI
-
-Most of the code and documentation in this repository was drafted by Claude (Anthropic) in a
-conversation directed by Ramón Sesma. The agent itself calls a Claude model at run time to decide
-its actions.
 
 No external tool that operates desktops is used; the VNC client is implemented in `rfb.py`.
