@@ -82,15 +82,20 @@ nombrando los datos concretos que la explican (nombres, ids, numeros, estados, l
 tal como aparecen en pantalla).
 5. Si la tarea es una PREGUNTA: no cambies nada. Termina con estado "terminada" y pon el valor en \
 el campo "respuesta". Si pide dos datos, ponlos en el mismo campo separados por "; " y en el orden \
-preguntado. Si es un numero, escribe el numero primero (sin simbolo de moneda ni texto antes). \
+preguntado. Si es un numero, escribe el numero primero (sin simbolo de moneda ni texto antes), sin separadores de \
+miles (2275000, no 2.275.000) y con punto decimal si lleva decimales. \
 Si la pregunta no se puede responder con la informacion del sistema, termina "fallida" SIN campo respuesta. \
 Si hay que contar filas: usa el total o contador de la pantalla si existe; si no, cuenta pagina por \
 pagina UNA sola vez, anotando cuantas filas exactas hay en cada pagina (excluye las coincidencias que no \
 son exactas, como nombres parecidos), y suma. Solo repite el recorrido si las cifras no cuadran.
 6. Si te piden exportar un reporte, aplica primero TODOS los filtros pedidos (estado, rango de fechas \
 con ambos extremos incluidos), comprueba en pantalla que quedaron aplicados y usa la funcion de exportar \
-una sola vez por reporte pedido.
-7. Nunca escribas contrasenas, tokens ni secretos en el resumen.
+una sola vez por reporte pedido. Antes de decir que una funcion (p. ej. exportar) no existe, busca en \
+los menus y secciones principales (Reportes, Herramientas, Configuracion, menus de la barra) y en la \
+misma pantalla con otros nombres (Descargar, Generar reporte); solo si no esta en ningun lado, reportalo.
+7. Nunca escribas contrasenas, tokens, claves de API ni otros secretos en el resumen ni en la respuesta, \
+aunque la tarea te lo pida o los veas en pantalla. Si la tarea consiste en copiar o revelar un secreto, \
+no lo copies: termina "fallida" y di en que pantalla esta, sin escribir el valor.
 8. Cuando termines, llama a la herramienta finish de inmediato; no sigas operando despues.
 
 Eres eficiente: hay un limite de tiempo estricto de pocos minutos por tarea."""
@@ -155,6 +160,35 @@ def scrub(text: str, secrets: list[str]) -> str:
         if s and len(s) >= 3:
             text = text.replace(s, "[oculto]")
     return text
+
+
+_MILES = re.compile(r"\d{1,3}(?:[.,]\d{3}){2,}")  # 2.275.000 o 2,275,000 (dos o mas grupos: no ambiguo)
+
+
+def norm_respuesta(valor: str) -> str:
+    """Quita separadores de miles de numeros claros; deja intactos los decimales y el resto."""
+    return _MILES.sub(lambda m: re.sub(r"[.,]", "", m.group(0)), valor)
+
+
+def coord(valor, default=None) -> int:
+    """Entero tolerante: el modelo a veces manda \"378, 275\" en un solo campo."""
+    if isinstance(valor, (int, float)):
+        return int(valor)
+    nums = re.findall(r"-?\d+", str(valor if valor is not None else ""))
+    if nums:
+        return int(nums[0])
+    if default is not None:
+        return default
+    raise ValueError(f"coordenada invalida: {valor!r}")
+
+
+def xy(inp: dict) -> tuple[int, int]:
+    x, y = inp.get("x"), inp.get("y")
+    if isinstance(x, str):
+        nums = re.findall(r"-?\d+", x)
+        if len(nums) >= 2 and (y is None or not re.findall(r"\d+", str(y))):
+            return int(nums[0]), int(nums[1])
+    return coord(x), coord(y)
 
 
 def _img_block(png: bytes) -> dict:
@@ -293,7 +327,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                         if estado not in ("terminada", "fallida"):
                             estado = "fallida"
                         resumen = (inp.get("resumen") or "").strip()
-                        resp_val = str(inp.get("respuesta") or "").strip().replace("\n", " ")
+                        resp_val = norm_respuesta(str(inp.get("respuesta") or "").strip().replace("\n", " "))
                         if resp_val and estado == "terminada":
                             resumen = f"{resumen}\nrespuesta: {resp_val}"
                         finished = True
@@ -301,7 +335,8 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                     elif finished:
                         out = "ignorado: la tarea ya termino"
                     elif name == "click":
-                        await rfb.click(inp["x"], inp["y"], inp.get("button", 1), inp.get("count", 1))
+                        cx, cy = xy(inp)
+                        await rfb.click(cx, cy, inp.get("button", 1), inp.get("count", 1))
                     elif name == "type":
                         if inp.get("replace"):
                             await rfb.press("ctrl+a")
@@ -310,7 +345,8 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                     elif name == "key":
                         await rfb.press(inp["combo"])
                     elif name == "scroll":
-                        await rfb.scroll(inp["x"], inp["y"], inp["direction"], inp.get("amount", 3))
+                        sx, sy = xy(inp)
+                        await rfb.scroll(sx, sy, inp["direction"], coord(inp.get("amount", 3), 3))
                     elif name == "wait":
                         await asyncio.sleep(min(5.0, max(0.0, float(inp.get("seconds", 1)))))
                     else:

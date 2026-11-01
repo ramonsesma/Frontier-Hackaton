@@ -146,6 +146,23 @@ async def main_extra():
     out, logs = await _run([("relleno", chain), fin()])
     assert out["e"] == "terminada", (out, logs)
     assert ACTS == [("click", 10, 20), ("type", "abc"), ("click", 30, 40), ("type", "def")], ACTS
+    # 6) coordenadas mal formadas ("378, 275" en un solo campo) no rompen la accion
+    out, logs = await _run([("clic", [tc(1, "click", x="378, 275")]), fin()])
+    assert out["e"] == "terminada" and ACTS == [("click", 378, 275)], (out, ACTS, logs)
+    out, logs = await _run([("clic", [tc(1, "click", x="100", y="200")]), fin()])
+    assert ACTS == [("click", 100, 200)], ACTS
+
+    # 7) numeros en respuesta: sin separador de miles; decimales y texto intactos
+    assert agent.norm_respuesta("2.275.000") == "2275000"
+    assert agent.norm_respuesta("2,275,000; 45") == "2275000; 45"
+    assert agent.norm_respuesta("1.250") == "1.250" and agent.norm_respuesta("45") == "45"
+    assert agent.norm_respuesta("3.5") == "3.5" and agent.norm_respuesta("lab-sync; (sin configurar)") == "lab-sync; (sin configurar)"
+    out, logs = await _run([("fin", [tc(1, "finish", estado="terminada", resumen="total", respuesta="2.275.000")])])
+    assert out["r"].endswith("respuesta: 2275000"), out
+
+    # 8) el prompt lleva las reglas nuevas (secretos en pantalla, buscar exportar en menus)
+    assert "claves de API" in agent.SYSTEM and "no lo copies" in agent.SYSTEM
+    assert "Reportes" in agent.SYSTEM and "sin separadores de" in agent.SYSTEM
     print("EXTRA OK")
 
 

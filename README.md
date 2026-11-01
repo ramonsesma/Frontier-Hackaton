@@ -125,6 +125,24 @@ without closing.
 - Trade-off: with the shorter checks the agent, in the one run we read, searched for an existing client by
   tax id only and not also by name, so a same-name record with another id would be less likely to be seen.
 
+### After the event: validation run and fixes
+
+In the event's validation run (an unseen clinic app) the agent sent 34 tasks to completion: 23 reported
+`terminada`, 11 `fallida`, 6 of them by running out of the 270 s limit. How the judge scored them is not
+known to us. Problems seen in the logs, and the small fixes made afterwards:
+
+| Problem seen | Fix (in `agent.py`) |
+| --- | --- |
+| A task asked to copy an integration key shown on screen; the key ended up in the summary | Prompt rule: never write on-screen secrets; fail the task saying where it is |
+| A numeric answer used thousands separators (`2.275.000`) | Prompt rule plus `norm_respuesta` strips clear separators |
+| "No export button" reported after a short look | Prompt rule: check menus and other names before saying a function is missing |
+| The model sent `"378, 275"` in one coordinate field and the click failed | `coord` / `xy` accept it |
+
+These fixes are **tested only with the fake model** (`test_agent.py`). They were not run against a real
+desktop or the real model, and the deployed service was not updated (it still runs commit 70401b4).
+Not changed: the time-outs (model latency, about 6 s per step) and a case where the agent cancelled a
+pending appointment because the app asked for it, which may count as an extra change.
+
 ## Use of AI
 
 Most of the code and documentation in this repository was drafted by Claude (Anthropic) in a
