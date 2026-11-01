@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/cover.svg" alt="Frontier Hackathon — Agent for a legacy system with no API" width="100%">
+</p>
+
 # Agent for a legacy system with no API
 
 An HTTP service whose agent operates an unseen management system the way a new employee would:
