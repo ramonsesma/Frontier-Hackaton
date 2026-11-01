@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/cover.svg" alt="Frontier Hackathon — Agent for a legacy system with no API" width="100%">
+  <img src="docs/cover.png" alt="Frontier Hackathon — Agent for a legacy system with no API" width="100%">
 </p>
 
 # Agent for a legacy system with no API
