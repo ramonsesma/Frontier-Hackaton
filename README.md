@@ -98,7 +98,7 @@ Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
 ## Tests
 
 ```bash
-pip install -r requirements.txt   # httpx, needed by the service tests, comes with `openai`
+pip install -r requirements.txt   # includes httpx, needed by the service tests
 python test_rfb.py     # VNC client against a simulated server
 python test_server.py  # per-desktop locking, cancellation, duplicates, late start, 401 on bad tokens
 python test_agent.py   # agent loop with a fake model and desktop: actions, secret scrubbing,
