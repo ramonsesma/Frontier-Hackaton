@@ -2,6 +2,13 @@
   <img src="docs/cover.png" alt="Frontier Hackathon — Agent for a legacy system with no API" width="100%">
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-aaa2ff?logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/Docker-ready-aaa2ff?logo=docker&logoColor=white" alt="Docker ready">
+  <a href="https://github.com/ramonsesma/Frontier-Hackaton/releases/tag/v1.0.0"><img src="https://img.shields.io/badge/release-v1.0.0-aaa2ff" alt="Release v1.0.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-aaa2ff" alt="MIT License"></a>
+</p>
+
 # Agent for a legacy system with no API
 
 An HTTP service whose agent operates an unseen management system the way a new employee would:
@@ -12,6 +19,25 @@ language, works on it in the background and reports a final status and a summary
 - Architecture diagram: [`docs/arquitectura.png`](docs/arquitectura.png)
 
 ![Architecture](docs/arquitectura.png)
+
+## Demo
+
+The service accepts a natural-language task, starts the visual agent in the background, and returns a task ID immediately. The agent then operates the target desktop over VNC and publishes a final status and summary.
+
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Authorization: Bearer $TEAM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tarea": "Create a client record for Ada Lovelace",
+    "escritorio": {
+      "url": "wss://example.com/websockify",
+      "password": "<desktop password>"
+    }
+  }'
+```
+
+Use `GET /tasks/{task_id}` to retrieve the final status and summary. A live-demo recording can be added here when a non-sensitive capture is available.
 
 ## How it works
 
