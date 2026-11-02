@@ -9,7 +9,7 @@ it looks at the screen and uses mouse and keyboard over VNC. It receives a task 
 language, works on it in the background and reports a final status and a summary.
 
 - Design document: [`docs/DESIGN.md`](docs/DESIGN.md)
-- Architecture diagram: [`docs/arquitectura.png`](docs/arquitectura.png) (editable source: `docs/arquitectura.svg`)
+- Architecture diagram: [`docs/arquitectura.png`](docs/arquitectura.png)
 
 ![Architecture](docs/arquitectura.png)
 
