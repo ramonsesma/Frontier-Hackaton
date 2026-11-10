@@ -22,7 +22,7 @@ We built an HTTP service whose agent operates an unseen legacy system through sc
 
 ## 2. Architecture and decisions
 
-The service has three modules. `server.py` validates the token and starts the task in the background. `agent.py` runs the loop: screenshot, model decision, actions, screenshot. `rfb.py` speaks VNC over the websocket. The model sees the screen and answers with actions in pixel coordinates; it never touches an app API.
+The service has three main modules and a small one. `server.py` validates the token and starts the task in the background. `agent.py` runs the loop: screenshot, model decision, actions, screenshot; before it reports a task that changed data as `terminada` it asks the model for on-screen evidence. `rfb.py` speaks VNC over the websocket. `notes.py` keeps short, sanitised interface hints from earlier successful tasks and hands them to later ones as unverified. Each task also prints one `TRACE` line to the logs, and `tools/analyze_logs.py` reads those logs offline so a person can decide what to change; it never edits the prompt. The model sees the screen and answers with actions in pixel coordinates; it never touches an app API.
 
 ![Architecture](arquitectura.png)
 
