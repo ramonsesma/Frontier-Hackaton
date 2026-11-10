@@ -17,6 +17,7 @@ pip install -r requirements.txt
 python test_rfb.py
 python test_server.py
 python test_agent.py
+python test_analyze.py
 ```
 
 ## Pull requests

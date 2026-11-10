@@ -93,6 +93,10 @@ Every call needs `Authorization: Bearer <TEAM_TOKEN>`.
 | `MAX_STEPS` | Cap of model calls per task | `80` |
 | `TASK_HARD_LIMIT_S` | Hard limit per task, in seconds | `270` |
 | `TASK_WARN_S` | When the model is told to wrap up | `210` |
+| `REQUIRE_EVIDENCE` | `0` turns off the evidence check before `terminada` (see below) | `1` |
+| `NOTES_ENABLED` | `0` turns off the app hints shared between tasks | `1` |
+| `NOTES_MAX` / `NOTES_TTL_S` | Max hints kept / seconds before a hint expires | `12` / `21600` |
+| `NOTES_FILE` | Optional JSON file so hints survive a restart (without it they live in memory) | unset |
 | `PORT` | Port inside the container | `8080` |
 
 ## Tests
@@ -102,7 +106,8 @@ pip install -r requirements.txt   # includes httpx, needed by the service tests
 python test_rfb.py     # VNC client against a simulated server
 python test_server.py  # per-desktop locking, cancellation, duplicates, late start, 401 on bad tokens
 python test_agent.py   # agent loop with a fake model and desktop: actions, secret scrubbing,
-                       # model-error retries, chained actions
+                       # model-error retries, chained actions, app hints, evidence check, trace
+python test_analyze.py # the log analyzer, on synthetic log lines
 ```
 
 None of them needs network, an API key or a real desktop. They do **not** exercise the real model or
@@ -173,5 +178,35 @@ desktop or the real model, and the deployed service was not updated (it still ru
 Not changed: the time-outs (model latency, about 6 s per step) and a case where the agent cancelled a
 pending appointment because the app asked for it, which may count as an extra change.
 
+
+### Changes made from the evaluation feedback
+
+The reviewers' notes pointed at three weaknesses: the domain knowledge lives in a hand-tuned prompt,
+nothing in the code checks the screen before a task is reported done, and nothing learns between
+tasks. What changed (all tested only with the fake model and desktop; **not** run against a real
+desktop or the real model, and the deployed service was not updated):
+
+| Feedback | Change |
+| --- | --- |
+| Each task starts from zero | `notes.py`: after a `terminada` task the agent may return up to 3 short `notas_app` (where a function lives, how a filter is called, how a pop-up closes). Later tasks get them in the prompt, labelled as possibly outdated hints to verify. Notes are sanitised (no secrets, links, long numbers, instruction-like text), capped, expire, and are never stored from a failed task (a wrong "there is no export button" could otherwise stick). In memory by default; `NOTES_FILE` keeps them across restarts. |
+| The code only trusts the model's `estado` | `finish` takes an `evidencia` field (the exact on-screen text that confirms the result). If a task that changed data is reported `terminada` without it, the agent is sent back once to look at the screen. Questions, failed tasks and the last 45 s are not sent back. |
+| Learning is manual | Every task prints a `TRACE` line (steps, action counts, time-out, retries, hints used). `tools/analyze_logs.py` summarises a log file and lists what to review (time-outs, leaked-looking keys, thousands separators, repeated clicks, "no button" failures). It never edits the prompt: a rule change still needs a human and a check on the practice tasks. |
+
+Limits: the hints are shared by all desktops of one process, so if the evaluator switched to a
+different app they could mislead (the prompt says to verify them). The evidence check costs an extra
+model call on tasks where the model forgets it. Neither change has been measured on a real run, so we
+do not know how many time-outs the hints would remove.
+
+Using the analyzer on a log you saved (for example from the hosting provider):
+
+```bash
+python tools/analyze_logs.py render.log
+```
+
+## Use of AI
+
+Most of the code and documentation in this repository was drafted by Claude (Anthropic) in a
+conversation directed by Ramón Sesma. The agent itself calls a Claude model at run time to decide
+its actions.
 
 No external tool that operates desktops is used; the VNC client is implemented in `rfb.py`.

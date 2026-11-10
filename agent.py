@@ -10,6 +10,7 @@ import traceback
 import openai
 from openai import AsyncOpenAI
 
+import notes
 from rfb import RFBClient
 
 MODEL = os.environ.get("AGENT_MODEL", "anthropic/claude-sonnet-4.5")  # id de OpenRouter
@@ -22,6 +23,8 @@ MIN_START_S = 20  # si al llegar su turno quedan menos segundos, no se toca el e
 MAX_TOKENS = 1500
 MAX_MODEL_ERRORS = 3  # fallos transitorios seguidos del modelo antes de rendirse
 CHAIN_PAUSE_S = 0.4   # pausa entre acciones encadenadas en una misma respuesta (repintado)
+REQUIRE_EVIDENCE = os.environ.get("REQUIRE_EVIDENCE", "1") != "0"  # exigir evidencia antes de 'terminada'
+EVIDENCE_MIN_REMAINING_S = 45  # con menos tiempo no se devuelve al modelo: se acepta tal cual
 
 
 def _transient(e: Exception) -> bool:
@@ -97,6 +100,12 @@ misma pantalla con otros nombres (Descargar, Generar reporte); solo si no esta e
 aunque la tarea te lo pida o los veas en pantalla. Si la tarea consiste en copiar o revelar un secreto, \
 no lo copies: termina "fallida" y di en que pantalla esta, sin escribir el valor.
 8. Cuando termines, llama a la herramienta finish de inmediato; no sigas operando despues.
+9. Si la tarea cambio datos o genero algo, en finish pon en `evidencia` el texto exacto que ves en \
+pantalla y confirma el resultado (mensaje de exito, codigo nuevo, valor guardado, id del reporte). \
+Si no ves esa confirmacion, no digas terminada: compruebala o reporta que no pudiste confirmarlo.
+10. En finish puedes anadir hasta 3 `notas_app`: pistas cortas sobre la INTERFAZ que ayudarian en otra \
+tarea (en que menu esta una funcion, como se llama un filtro, como se cierra un aviso). Solo interfaz: \
+nada de nombres, cifras ni datos de la tarea, y nunca contrasenas ni claves.
 
 Eres eficiente: hay un limite de tiempo estricto de pocos minutos por tarea."""
 
@@ -144,7 +153,9 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {
             "estado": {"type": "string", "enum": ["terminada", "fallida"]},
             "resumen": {"type": "string"},
-            "respuesta": {"type": "string"}},
+            "respuesta": {"type": "string"},
+            "evidencia": {"type": "string", "description": "Texto exacto visto en pantalla que confirma el resultado (obligatorio si la tarea cambio datos)."},
+            "notas_app": {"type": "array", "items": {"type": "string"}, "description": "Hasta 3 pistas cortas sobre la interfaz para otras tareas. Sin datos de la tarea ni secretos."}},
             "required": ["estado", "resumen"]},
     },
 ]
@@ -217,6 +228,11 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
     all_secrets = [password] + list(secrets)
     rfb = None
     estado, resumen = "fallida", "No se pudo completar la tarea."
+    steps = 0
+    timed_out = False
+    evidence_nudged = False
+    notes_used = notes_saved = model_err_total = 0
+    action_counts: dict = {}
 
     def remaining():
         return HARD_LIMIT_S - (time.monotonic() - t0)
@@ -239,6 +255,12 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
         client = AsyncOpenAI(base_url=BASE_URL, api_key=os.environ.get("OPENROUTER_API_KEY", ""),
                              max_retries=1, timeout=60)
         system = SYSTEM.format(w=rfb.width, h=rfb.height)
+        if notes.NOTES is not None:
+            hints = notes.NOTES.active()
+            notes_used = len(hints)
+            if hints:
+                system += notes.NOTES.render()
+                log(f"pistas de la app: {notes_used}")
 
         shot = await rfb.screenshot(settle=0.3)
         messages = [{"role": "system", "content": system},
@@ -254,6 +276,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
         while not finished:
             if remaining() <= 8 or steps >= MAX_STEPS:
                 log(f"corte: quedan {remaining():.0f}s, pasos={steps}")
+                timed_out = True
                 estado = "fallida"
                 resumen = ("Se agoto el tiempo antes de poder confirmar que la tarea quedo completa. "
                            f"Tarea: {tarea}")
@@ -279,6 +302,7 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                 err = "respuesta vacia del modelo"
             if err:
                 model_errors += 1
+                model_err_total += 1
                 steps -= 1  # un fallo del servicio no cuenta como paso
                 log(f"paso {steps + 1}: fallo transitorio del modelo ({model_errors}/{MAX_MODEL_ERRORS}): {err}")
                 if model_errors >= MAX_MODEL_ERRORS or remaining() < 30:
@@ -320,18 +344,37 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
                 except Exception:
                     inp = {}
                 out = "ok"
+                action_counts[name] = action_counts.get(name, 0) + 1
                 log(f"accion {name} {json.dumps(inp, ensure_ascii=False)}")
                 try:
                     if name == "finish":
-                        estado = inp.get("estado", "fallida")
-                        if estado not in ("terminada", "fallida"):
-                            estado = "fallida"
-                        resumen = (inp.get("resumen") or "").strip()
+                        est = inp.get("estado", "fallida")
+                        if est not in ("terminada", "fallida"):
+                            est = "fallida"
                         resp_val = norm_respuesta(str(inp.get("respuesta") or "").strip().replace("\n", " "))
-                        if resp_val and estado == "terminada":
-                            resumen = f"{resumen}\nrespuesta: {resp_val}"
-                        finished = True
-                        out = "finalizado"
+                        evid = " ".join(str(inp.get("evidencia") or "").split())
+                        if (REQUIRE_EVIDENCE and est == "terminada" and not resp_val and len(evid) < 5
+                                and not evidence_nudged and remaining() > EVIDENCE_MIN_REMAINING_S):
+                            # una sola vez: obliga a mirar la pantalla antes de dar por buena la tarea
+                            evidence_nudged = True
+                            out = ("Falta la evidencia. Antes de dar la tarea por terminada, mira la pantalla actual "
+                                   "y llama a finish otra vez con 'evidencia': el texto exacto que ves y confirma el "
+                                   "resultado (mensaje de exito, codigo nuevo, valor guardado). Si no lo ves, "
+                                   "compruebalo o reporta fallida.")
+                            log("finish sin evidencia: se devuelve al modelo una vez")
+                        else:
+                            estado = est
+                            resumen = (inp.get("resumen") or "").strip()
+                            if resp_val and estado == "terminada":
+                                resumen = f"{resumen}\nrespuesta: {resp_val}"
+                            if evid:
+                                log(f"evidencia: {evid[:200]}")
+                            if estado == "terminada" and notes.NOTES is not None:
+                                notes_saved = notes.NOTES.add(inp.get("notas_app"), all_secrets)
+                                if notes_saved:
+                                    log(f"pistas guardadas: {notes_saved}")
+                            finished = True
+                            out = "finalizado"
                     elif finished:
                         out = "ignorado: la tarea ya termino"
                     elif name == "click":
@@ -381,4 +424,13 @@ async def run_task(tarea: str, url: str, password: str, secrets: list[str], on_d
         if rfb:
             await rfb.close()  # dejar de operar de inmediato
         log(f"fin estado={estado} resumen={resumen}")
+        try:
+            trace = {"estado": estado, "secs": int(time.monotonic() - t0), "pasos": steps,
+                     "acciones": action_counts, "tiempo_agotado": timed_out,
+                     "errores_modelo": model_err_total, "evidencia_pedida": evidence_nudged,
+                     "pistas_usadas": notes_used, "pistas_guardadas": notes_saved,
+                     "resumen": " ".join(resumen.split())[:300]}
+            log("TRACE " + json.dumps(trace, ensure_ascii=False), limit=1200)
+        except Exception:
+            pass  # la traza es una ayuda: nunca debe impedir reportar el resultado
         on_done(estado, scrub(resumen, all_secrets))

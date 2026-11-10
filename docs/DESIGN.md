@@ -37,6 +37,9 @@ The service has three modules. `server.py` validates the token and starts the ta
 | Secrets | Replace the password and tokens in the summary in code | Asking the model not to repeat them | A leak makes the task incorrect |
 | Concurrency | One agent per desktop (lock keyed by the VNC URL); a new task on the same desktop cancels the previous one; an identical task still running returns the same `task_id`; the 5-minute clock starts when the request arrives | One global lock; parallel agents on one desktop | Two agents on the same desktop would corrupt each other, a queued task must not run after the evaluator reset the desktop, and desktops of different tasks do not interfere |
 | Context | Keep the last 4 screenshots | Keep all | Latency and cost grow with every image |
+| Memory between tasks | A small, sanitised list of interface hints from `terminada` tasks, shown to later tasks as unverified | No memory; a full UI model | Each task rediscovered the same menus. A UI model needs more time and data than we had; hints are cheap and safe if they are verified |
+| Verification | Model fills `evidencia` with on-screen text; code asks once if it is missing on data-changing tasks | A second verifier agent | A verifier costs a full extra pass in a 5-minute budget; one conditional nudge costs one call and only when needed |
+| Learning loop | `TRACE` lines plus a log analyzer that lists what to review | Automatic prompt rewriting | A prompt change on unseen tasks needs review; the tool finds patterns, a person decides |
 
 ## 3. Plan to measure
 
@@ -113,6 +116,8 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 - `terminada` / `fallida` and the `respuesta:` line were checked by reading the task output and the service logs, because the app check only looks at the state of the app. The summaries did not contain the desktop password.
 - The RFB client works with Raw encoding against the real desktop, and the model chosen is reachable with the event key.
 
+**After the evaluation feedback** the agent also got interface hints between tasks, an evidence check before `terminada`, per-task traces and a log analyzer (see the README). These were tested only with a fake model and desktop; their effect on time-outs or accuracy has not been measured.
+
 **Not verified:** any app other than the practice app (the grader uses one the agent has not seen), cost per task, behaviour on the 4 other systems, and the three validation runs of the event. Passing the practice tasks does not predict the held-out score; the prompt rules were written with these five tasks in view.
 
 | Risk | Effect | Mitigation |
@@ -121,6 +126,7 @@ The practice tasks cover: creating a client (E1), correcting an address on a rec
 | Free hosting sleeps after about 15 minutes without traffic | First call after a pause takes about a minute and can miss the 2 s limit | Call `/health` before each run |
 | Time runs out on a long task | Reported `fallida`, counted as a failure | Slowest practice run was 200 s; the loop stops at 270 s |
 | A transient model API error | Up to 3 retries, then `fallida` saying the task may be half done | Retries only tested with a fake model |
+| Hints from an earlier task are wrong after an app change | The agent follows a stale hint | Hints are labelled as unverified, expire after 6 h, are never taken from failed tasks, and a wrong one costs steps, not data |
 | The client changes the app again without notice | The agent has no hard-coded labels or positions, but prompt rules were tuned on the practice app | Step logs show where it gets lost; a different layout is unmeasured |
 | Service restarts mid-task | State in memory is lost | Keep one instance; do not deploy during evaluation |
 
